@@ -41,7 +41,6 @@ services:
       dockerfile: infra/web.Dockerfile
     environment:
       API_INTERNAL_URL: http://api:8000
-      NEXT_PUBLIC_API_BASE_URL: /api/v1
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
       - "127.0.0.1:3000:3000"

@@ -53,7 +53,7 @@ To add the separate 10-machine, 100-job fictional load-test facility to a local 
 - FCFS, SPT, and EDD are resource-constrained dispatch rules. CP-SAT uses optional machine intervals, precedence, release times, calendars, and downtime. A separate validator checks every produced assignment before it is persisted as valid.
 - SimPy produces deterministic schedule playback and configurable stochastic replications. Random assumptions are labeled as model inputs, not measured factory reliability.
 - Metrics are calculated centrally from actual assignments or simulation events. Makespan, tardiness, throughput, utilization, waiting, and machine operating cost have documented definitions.
-- Long runs execute in isolated processes; the UI polls run status and cancellation terminates the active calculation.
+- Schedule and simulation requests return a run ID for polling. Local mode uses isolated processes; the Vercel deployment uses Queue subscribers with database-backed claims and persisted cancellation.
 
 See [Architecture](docs/architecture.md), [Algorithms](docs/algorithms.md), [Metrics](docs/metrics.md), [Data model](docs/data-model.md), [Design system](docs/design-system.md), and [Deployment notes](docs/deployment.md). The [measured benchmarks](docs/benchmarks.md) and [portfolio case study](docs/case-study.md) use fixed fictional inputs and report actual solver status.
 
@@ -70,6 +70,6 @@ With the API and web app running against the seeded local workspace, run `make t
 
 The benchmark script seeds an isolated in-memory database and records fresh measurements. Time-limited CP-SAT feasible incumbents may vary with system load; only a run marked `OPTIMAL` has proven its selected objective.
 
-## Deployment boundary
+## Deployment
 
-The included Compose setup binds to localhost. A Vercel project with **Root Directory** `apps/web` can host the Next.js frontend after the repository is pushed to GitHub; set `API_INTERNAL_URL` to the HTTPS origin of a separately hosted, persistent Python API. The API's local solver workers do not fit Vercel serverless as written. Use persistent PostgreSQL and apply Alembic migrations before starting it. The demo has no accounts or authorization, so protect writable routes before public access or disable writes for a read-only demo. See the [deployment notes](docs/deployment.md) for setup details. No physical machine, sensor, or IoT connection is required.
+The included Compose setup binds to localhost and uses local worker processes. The repository-root [Vercel configuration](vercel.json) defines a public Next.js service, a private FastAPI service, and a private scheduled reconciliation function. Vercel Queue subscribers run schedules and simulations; both API and subscribers need the same managed PostgreSQL database. Apply Alembic migrations and seed the fictional demo once before using the deployment. Enable Vercel Authentication for **All Deployments** because the demo has no application accounts or per-user permissions. The Vercel service binding, queue delivery, and scheduled function still require validation in a live Vercel project. See the [deployment notes](docs/deployment.md) for exact setup and checks. No physical machine, sensor, or IoT connection is required.

@@ -11,6 +11,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
+from app.core.database_url import resolve_database_url
+
 
 class Base(DeclarativeBase):
     pass
@@ -41,7 +43,7 @@ class UTCDateTime(TypeDecorator):
         return value.astimezone(timezone.utc)
 
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./linepilot.db")
+DATABASE_URL = resolve_database_url(os.getenv("DATABASE_URL"), on_vercel=os.getenv("VERCEL") == "1")
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

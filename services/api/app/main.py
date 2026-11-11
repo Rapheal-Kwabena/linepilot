@@ -17,6 +17,7 @@ from app.api import imports, reports, resources, runs
 from app.core.db import DATABASE_URL, Base, SessionLocal, engine
 from app.models import *  # noqa: F403 - register all metadata tables before create_all
 from app.seed import seed_facility
+from app.workers.queue_runs import run_backend
 from app.workers.runs import recover_interrupted_runs
 
 
@@ -43,12 +44,14 @@ logger = logging.getLogger("app.main")
 async def lifespan(app: FastAPI):  # noqa: ARG001
     # SQLite is the zero-configuration local path. PostgreSQL deployments run
     # Alembic migrations before startup (see docker-compose.yml).
+    backend = run_backend()
     if DATABASE_URL.startswith("sqlite"):
         Base.metadata.create_all(engine)
-    if os.getenv("AUTO_SEED", "1") == "1":
+    if os.getenv("AUTO_SEED", "1" if backend == "local" else "0") == "1":
         with SessionLocal() as db:
             seed_facility(db)
-    recover_interrupted_runs()
+    if backend == "local":
+        recover_interrupted_runs()
     yield
 
 

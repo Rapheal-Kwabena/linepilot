@@ -1,3 +1,20 @@
+[project]
+name = "linepilot-api"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.162.4",
+    "SQLAlchemy==2.1.8",
+    "psycopg[binary]==3.3.8",
+    "pydantic==2.14.3",
+    "ortools==9.15.6755",
+    "simpy==4.1.2",
+    "pandas==2.3.3",
+    "reportlab==4.5.1",
+    "pillow==12.2.0",
+    "vercel-queue[typed]==0.10.1",
+]
+
 [tool.ruff]
 line-length = 110
 target-version = "py312"
@@ -9,3 +26,9 @@ ignore = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.vercel]
+entrypoint = "app.main:app"
+
+[[tool.vercel.subscribers]]
+entrypoint = "app.queue_subscriber"

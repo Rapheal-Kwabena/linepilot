@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
+from hmac import compare_digest
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,6 +25,14 @@ from app.serializers import (
     serialize_simulation_event,
 )
 from app.snapshot import apply_modifications, build_snapshot
+from app.workers.queue_runs import (
+    QUEUE_BACKEND,
+    cancel_queue_run,
+    fail_queued_submission,
+    publish_run,
+    reconcile_queue_runs,
+    run_backend,
+)
 from app.workers.runs import cancel, launch
 
 router = APIRouter()
@@ -54,6 +64,7 @@ def _create_schedule_run(
     random_seed: int,
     search_workers: int,
 ) -> ScheduleRun:
+    backend = run_backend()
     run = ScheduleRun(
         facility_id=facility_id,
         scenario_id=scenario_id,
@@ -66,6 +77,7 @@ def _create_schedule_run(
             "random_seed": random_seed,
             "search_workers": search_workers,
         },
+        execution_backend=backend,
         status="queued",
         diagnostics=[],
         metrics={},
@@ -73,22 +85,29 @@ def _create_schedule_run(
     db.add(run)
     db.commit()
     try:
-        launch(
-            "schedule",
-            run.id,
-            snapshot,
-            {
-                "algorithm": algorithm,
-                "objective": objective,
-                "time_limit_seconds": time_limit_seconds,
-                "random_seed": random_seed,
-                "search_workers": search_workers,
-            },
-        )
+        if backend == QUEUE_BACKEND:
+            publish_run("schedule", run.id)
+        else:
+            launch(
+                "schedule",
+                run.id,
+                snapshot,
+                {
+                    "algorithm": algorithm,
+                    "objective": objective,
+                    "time_limit_seconds": time_limit_seconds,
+                    "random_seed": random_seed,
+                    "search_workers": search_workers,
+                },
+            )
     except Exception as exc:
-        run.status = "failed"
-        run.diagnostics = [f"Could not start scheduling worker: {exc}"]
-        db.commit()
+        if backend == QUEUE_BACKEND:
+            fail_queued_submission("schedule", run.id)
+            db.expire_all()
+        else:
+            run.status = "failed"
+            run.diagnostics = [f"Could not start scheduling worker: {exc}"]
+            db.commit()
         raise ApiError(503, "worker_unavailable", "Scheduling worker could not be started") from exc
     db.refresh(run)
     return run
@@ -183,8 +202,13 @@ def get_schedule_metrics(schedule_id: str, db: Session = Depends(get_db)) -> dic
 
 @router.post("/schedules/{schedule_id}/cancel")
 def cancel_schedule(schedule_id: str, db: Session = Depends(get_db)) -> dict:
-    get_or_404(db, ScheduleRun, schedule_id, "Schedule")
-    if not cancel("schedule", schedule_id):
+    run = get_or_404(db, ScheduleRun, schedule_id, "Schedule")
+    stopped = (
+        cancel_queue_run("schedule", schedule_id)
+        if run.execution_backend == QUEUE_BACKEND
+        else cancel("schedule", schedule_id)
+    )
+    if not stopped:
         raise ApiError(409, "not_running", "Only a queued or running schedule can be cancelled")
     db.expire_all()
     return serialize_schedule(get_or_404(db, ScheduleRun, schedule_id, "Schedule"), include_assignments=False)
@@ -378,11 +402,13 @@ def create_simulation(body: SimulationCreate, db: Session = Depends(get_db)) -> 
         config["failure_rate_per_hour"] = 0
     if config["horizon_minutes"] is None:
         config["horizon_minutes"] = schedule_run.input_snapshot["horizon_minutes"]
+    backend = run_backend()
     run = SimulationRun(
         scenario_id=schedule_run.scenario_id,
         schedule_run_id=schedule_run.id,
         random_seed=body.random_seed,
         configuration=config,
+        execution_backend=backend,
         status="queued",
         summary_metrics={},
         diagnostics=[],
@@ -390,16 +416,23 @@ def create_simulation(body: SimulationCreate, db: Session = Depends(get_db)) -> 
     db.add(run)
     db.commit()
     try:
-        launch(
-            "simulation",
-            run.id,
-            schedule_run.input_snapshot,
-            {"assignments": _assignment_inputs(schedule_run), "config": config},
-        )
+        if backend == QUEUE_BACKEND:
+            publish_run("simulation", run.id)
+        else:
+            launch(
+                "simulation",
+                run.id,
+                schedule_run.input_snapshot,
+                {"assignments": _assignment_inputs(schedule_run), "config": config},
+            )
     except Exception as exc:
-        run.status = "failed"
-        run.diagnostics = [f"Could not start simulation worker: {exc}"]
-        db.commit()
+        if backend == QUEUE_BACKEND:
+            fail_queued_submission("simulation", run.id)
+            db.expire_all()
+        else:
+            run.status = "failed"
+            run.diagnostics = [f"Could not start simulation worker: {exc}"]
+            db.commit()
         raise ApiError(503, "worker_unavailable", "Simulation worker could not be started") from exc
     db.refresh(run)
     return serialize_simulation(run, schedule=schedule_run, include_events=False)
@@ -477,7 +510,12 @@ def get_simulation_metrics(simulation_id: str, db: Session = Depends(get_db)) ->
 @router.post("/simulations/{simulation_id}/cancel")
 def cancel_simulation(simulation_id: str, db: Session = Depends(get_db)) -> dict:
     run = get_or_404(db, SimulationRun, simulation_id, "Simulation")
-    if not cancel("simulation", simulation_id):
+    stopped = (
+        cancel_queue_run("simulation", simulation_id)
+        if run.execution_backend == QUEUE_BACKEND
+        else cancel("simulation", simulation_id)
+    )
+    if not stopped:
         raise ApiError(409, "not_running", "Only a queued or running simulation can be cancelled")
     db.expire_all()
     fresh = get_or_404(db, SimulationRun, simulation_id, "Simulation")
@@ -550,3 +588,17 @@ def bottlenecks(
         simulation_metrics = simulation.summary_metrics
     result = analyze_bottlenecks(run.input_snapshot, _assignment_inputs(run), simulation_metrics)
     return {"schedule_id": run.id, "simulation_id": simulation_id, **result}
+
+
+@router.post("/internal/reconcile-runs", include_in_schema=False)
+def reconcile_runs(request: Request) -> dict:
+    """Recover the narrow DB-commit/queue-publish crash window.
+
+    A private Vercel scheduled function calls this route through a service
+    binding. It deliberately fails closed when CRON_SECRET is unset.
+    """
+    secret = os.getenv("CRON_SECRET")
+    authorization = request.headers.get("authorization", "")
+    if not secret or not compare_digest(authorization, f"Bearer {secret}"):
+        raise ApiError(401, "unauthorized", "Reconciliation requires its configured secret")
+    return reconcile_queue_runs()

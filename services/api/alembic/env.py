@@ -5,18 +5,18 @@ from __future__ import annotations
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import create_engine, pool
 
-from app.core.db import Base
+from alembic import context
 from app import models  # noqa: F401 - import mapped tables
-
+from app.core.database_url import resolve_database_url
+from app.core.db import Base
 
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata
-database_url = os.getenv("DATABASE_URL", "sqlite:///./linepilot.db")
+database_url = resolve_database_url(os.getenv("DATABASE_URL"), on_vercel=os.getenv("VERCEL") == "1")
 
 
 def run_migrations_offline() -> None:

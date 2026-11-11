@@ -12,10 +12,10 @@ from datetime import date, datetime, time, timedelta, timezone
 from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
-from app.core.db import Base, SessionLocal, engine
+from app.core.db import DATABASE_URL, Base, SessionLocal, engine
 from app.models import (
     DowntimeEvent,
     Facility,
@@ -252,13 +252,22 @@ def seed_facility(db: Session, *, large: bool = False, anchor: date | None = Non
     return facility
 
 
+def _ensure_seed_schema() -> None:
+    if DATABASE_URL.startswith("sqlite"):
+        Base.metadata.create_all(engine)
+        return
+    with engine.connect() as connection:
+        if not inspect(connection).has_table("alembic_version"):
+            raise RuntimeError("Apply Alembic migrations before seeding PostgreSQL: alembic upgrade head")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed fictional Northline demonstration data")
     parser.add_argument(
         "--large", action="store_true", help="Also create a 10-machine, 100-job load test facility"
     )
     args = parser.parse_args()
-    Base.metadata.create_all(engine)
+    _ensure_seed_schema()
     with SessionLocal() as db:
         facility = seed_facility(db)
         print(f"Seeded or found {facility.facility_name} ({facility.facility_code})")

@@ -6,6 +6,8 @@
 !.env.example
 !**/.env.example
 **/.venv
+**/.vercel
+**/_uv
 **/__pycache__
 **/.pytest_cache
 **/node_modules

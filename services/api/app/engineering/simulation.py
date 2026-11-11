@@ -19,6 +19,14 @@ from .common import (
 from .scheduling import validate_schedule
 
 
+class _Cancelled(Exception):
+    pass
+
+
+def _cancelled(cancel_event: Any) -> bool:
+    return bool(cancel_event is not None and cancel_event.is_set())
+
+
 def _configuration(data: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise EngineeringInputError("simulation configuration must be an object")
@@ -232,6 +240,7 @@ def _run_once(
     assignments: list[dict[str, Any]],
     settings: dict[str, Any],
     seed: int,
+    cancel_event: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     try:
         import simpy
@@ -388,7 +397,17 @@ def _run_once(
         if settings["mode"] == "deterministic"
         else horizon + 1
     )
-    env.run(until=run_until)
+    if cancel_event is None:
+        env.run(until=run_until)
+    else:
+        # Step event by event so a queue subscriber can stop active SimPy work
+        # after the API records cancellation in the shared database.
+        while env.peek() < run_until:
+            if _cancelled(cancel_event):
+                raise _Cancelled
+            env.step()
+        if _cancelled(cancel_event):
+            raise _Cancelled
     completed_job_ids = {event["job_id"] for event in events if event["event_type"] == "job_completed"}
     already_unfinished = {event["job_id"] for event in events if event["event_type"] == "job_unfinished"}
     if settings["mode"] == "stochastic":
@@ -409,7 +428,10 @@ def _run_once(
 
 
 def simulate(
-    snapshot: dict[str, Any], assignments: list[dict[str, Any]], config: dict[str, Any] | None = None
+    snapshot: dict[str, Any],
+    assignments: list[dict[str, Any]],
+    config: dict[str, Any] | None = None,
+    cancel_event: Any = None,
 ) -> dict[str, Any]:
     """Replay a validated schedule or run seeded stochastic SimPy replications."""
     response: dict[str, Any] = {
@@ -438,7 +460,11 @@ def simulate(
         )
         replications: list[dict[str, Any]] = []
         for index in range(settings["replications"]):
-            events, metrics = _run_once(data, assignments, settings, settings["random_seed"] + index)
+            if _cancelled(cancel_event):
+                raise _Cancelled
+            events, metrics = _run_once(
+                data, assignments, settings, settings["random_seed"] + index, cancel_event
+            )
             replications.append(metrics)
             if index == 0:
                 response["events"] = events
@@ -467,6 +493,8 @@ def simulate(
             replication_metrics=replications,
             confidence_intervals=intervals,
         )
+    except _Cancelled:
+        response.update(status="cancelled", diagnostics=["Simulation was cancelled."])
     except (EngineeringInputError, ValueError, RuntimeError) as exc:
         response["diagnostics"] = [str(exc)]
     return response

@@ -327,3 +327,6 @@ def test_cancellation_is_reported_without_result(snapshot):
         result = schedule(snapshot, algorithm, cancel_event=cancelled)
         assert result["status"] == "cancelled"
         assert result["assignments"] == []
+    simulation = simulate(snapshot, schedule(snapshot, "fcfs")["assignments"], cancel_event=cancelled)
+    assert simulation["status"] == "cancelled"
+    assert simulation["events"] == []

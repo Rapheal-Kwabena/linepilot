@@ -223,7 +223,10 @@ class DowntimeEvent(Base, TimestampMixin):
 
 class ScheduleRun(Base):
     __tablename__ = "schedule_runs"
-    __table_args__ = (Index("ix_schedule_facility_created", "facility_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_schedule_facility_created", "facility_id", "created_at"),
+        Index("ix_schedule_execution_status_lease", "execution_backend", "status", "lease_expires_at"),
+    )
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=new_id)
     facility_id: Mapped[str] = mapped_column(
@@ -239,7 +242,14 @@ class ScheduleRun(Base):
     solver_configuration: Mapped[dict] = mapped_column(
         JSON, default=dict, server_default="{}", nullable=False
     )
+    execution_backend: Mapped[str] = mapped_column(
+        String(20), default="local", server_default="local", nullable=False
+    )
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    claim_token: Mapped[str | None] = mapped_column(String(36))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    last_enqueued_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     solver_status: Mapped[str | None] = mapped_column(String(30))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
@@ -295,6 +305,9 @@ class Scenario(Base, TimestampMixin):
 
 class SimulationRun(Base):
     __tablename__ = "simulation_runs"
+    __table_args__ = (
+        Index("ix_simulation_execution_status_lease", "execution_backend", "status", "lease_expires_at"),
+    )
 
     id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=new_id)
     scenario_id: Mapped[str | None] = mapped_column(
@@ -305,7 +318,14 @@ class SimulationRun(Base):
     )
     random_seed: Mapped[int] = mapped_column(Integer, default=42, nullable=False)
     configuration: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    execution_backend: Mapped[str] = mapped_column(
+        String(20), default="local", server_default="local", nullable=False
+    )
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    claim_token: Mapped[str | None] = mapped_column(String(36))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    last_enqueued_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     summary_metrics: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     diagnostics: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, nullable=False)

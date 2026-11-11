@@ -1,0 +1,12 @@
+{
+  "name": "@linepilot/scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@vercel/schedules": "0.0.3"
+  }
+}

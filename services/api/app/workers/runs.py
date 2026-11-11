@@ -245,7 +245,11 @@ def recover_interrupted_runs() -> None:
 
     with SessionLocal() as db:
         for model in (ScheduleRun, SimulationRun):
-            for run in db.scalars(select(model).where(model.status.in_(["queued", "running"]))):
+            for run in db.scalars(
+                select(model).where(
+                    model.execution_backend == "local", model.status.in_(["queued", "running"])
+                )
+            ):
                 run.status = "failed"
                 run.completed_at = utc_now()
                 run.diagnostics = list(run.diagnostics or []) + ["API restarted before the run completed"]
