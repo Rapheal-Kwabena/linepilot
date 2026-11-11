@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: linepilot
+      POSTGRES_USER: linepilot
+      POSTGRES_PASSWORD: linepilot_local
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - linepilot_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linepilot -d linepilot"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/api.Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://linepilot:linepilot_local@db:5432/linepilot
+      CORS_ORIGINS: http://localhost:3000
+      AUTO_SEED: "1"
+      LINEPILOT_SOLVER_TIME_LIMIT_SECONDS: "30"
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/web.Dockerfile
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      NEXT_PUBLIC_API_BASE_URL: /api/v1
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  linepilot_pgdata:
